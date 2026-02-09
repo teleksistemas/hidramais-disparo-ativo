@@ -3,7 +3,7 @@ import express, { Request, Response } from "express";
 import { randomUUID } from "crypto";
 import { constrainedMemory } from "process";
 import { formatDateIfValid } from "./utils/date.js";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -146,10 +146,12 @@ async function saveLog(data: {
         purchaseDate: data.purchaseDate ?? null,
         trackingUrl: data.trackingUrl ?? null,
         note: data.note ?? null,
-        webhookPayload: data.webhookPayload,
-        blipPayload: data.blipPayload ?? undefined,
-        blipResponse: data.blipResponse ?? undefined,
-        vtexOrderPayload: data.vtexOrderPayload ?? undefined,
+        webhookPayload: data.webhookPayload as Prisma.InputJsonValue,
+        blipPayload: (data.blipPayload ?? undefined) as Prisma.InputJsonValue | undefined,
+        blipResponse: (data.blipResponse ?? undefined) as Prisma.InputJsonValue | undefined,
+        vtexOrderPayload: (data.vtexOrderPayload ?? undefined) as
+          | Prisma.InputJsonValue
+          | undefined,
         errorMessage: data.errorMessage ?? null,
         errorStack: data.errorStack ?? null,
       },
