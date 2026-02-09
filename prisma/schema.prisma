@@ -1,0 +1,25 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model WebhookLog {
+  id              String   @id @default(uuid())
+  createdAt       DateTime @default(now())
+  status          String?
+  orderNumber     String?
+  messageTemplate String?
+  purchaseDate    String?
+  trackingUrl     String?
+  note            String?
+  webhookPayload  Json
+  blipPayload     Json?
+  blipResponse    Json?
+  vtexOrderPayload Json?
+  errorMessage    String?
+  errorStack      String?
+}

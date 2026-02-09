@@ -1,0 +1,35 @@
+{
+    "id": "32d22f3c-24b8-4d91-8c68-f053359fa775",
+    "to": "postmaster@activecampaign.msging.net",
+    "method": "set",
+    "uri": "/campaign/full",
+    "type": "application/vnd.iris.activecampaign.full-campaign+json",
+    "resource": {
+        "campaign": {
+            "name": "Hidramais 1202698a-0ac4-4fb5-80ab-199cea35269e",
+            "campaignType": "Batch",
+            "flowId": "900d09c2-c4c3-4f17-a6af-0b81e6188e50",
+            "stateId": "onboarding",
+            "masterstate": "hidramaisactivev2@msging.net",
+            "channelType": "WhatsApp"
+        },
+        "audiences": [
+            {
+                "recipient": "+5534992325278@wa.gw.msging.net",
+                "messageParams": {
+                    "1": "Renata Costa",
+                    "2": "1606420580989-01",
+                    "3": "27/01/2026"
+                }
+            }
+        ],
+        "message": {
+            "messageTemplate": "pedido_ready_for_handling",
+            "messageParams": [
+                "1",
+                "2",
+                "3"
+            ]
+        }
+    }
+}
