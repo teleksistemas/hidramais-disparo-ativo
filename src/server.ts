@@ -95,10 +95,10 @@ const vtexAppKey = process.env.VTEX_APP_KEY ?? "";
 const vtexAppToken = process.env.VTEX_APP_TOKEN ?? "";
 function resolveMessageTemplate(status: string): string {
   if (status === "ready-for-handling" || status === "handling") {
-    return "pedido_ready_for_handling";
+    return "pedido_ready_for_handling_v1";
   }
   if (status === "invoiced" || status === "shipped") {
-    return "pedido_com_confirmacao_de_envio";
+    return "pedido_com_confirmacao_de_envio_v1";
   }
   return "";
 }
@@ -378,7 +378,7 @@ async function handleAllowedStatus(payload: VtexWebhookPayload) {
   if (vtexOrderPayload) {
     orderDetails = buildOrderDetails(vtexOrderPayload);
   }
-  if (messageTemplate === "pedido_com_confirmacao_de_envio") {
+  if (messageTemplate === "pedido_com_confirmacao_de_envio_v1") {
     if (!trackingUrl) {
       trackingUrl = vtexResult.trackingUrl;
     }
