@@ -185,6 +185,30 @@ function pickTrackingUrlFromOrder(order: unknown): string | null {
   return null;
 }
 
+function buildOrderDetails(order: unknown): string | null {
+  const orderAny = order as {
+    statusDescription?: string | null;
+    creationDate?: string | null;
+    orderId?: string | null;
+    items?: Array<{ name?: string | null; quantity?: number | null }> | null;
+  };
+
+  if (!orderAny) return null;
+
+  const items = orderAny.items ?? [];
+  const details = {
+    status: orderAny.statusDescription ?? null,
+    data: orderAny.creationDate ?? null,
+    numero_pedido: orderAny.orderId ?? null,
+    produtos: items.map((item) => ({
+      nome: item?.name ?? null,
+      quantidade: item?.quantity ?? null,
+    })),
+  };
+
+  return JSON.stringify(details);
+}
+
 async function fetchTrackingUrlFromVtex(
   orderNumber: string,
 ): Promise<{ trackingUrl: string | null; order: unknown | null }> {
@@ -230,6 +254,7 @@ function buildBlipPayload(input: {
   orderNumber: string;
   purchaseDate: string;
   trackingUrl?: string;
+  orderDetails?: string;
 }): BlipPayload {
   
   return {
@@ -252,10 +277,12 @@ function buildBlipPayload(input: {
         {
           recipient: normalizePhone(input.phone),
           messageParams: {
+            "order":input.orderNumber,
             "1": input.name,
             "2": input.orderNumber,
             "3": formatDateIfValid(input.purchaseDate),
             ...(input.trackingUrl ? { "4": input.trackingUrl } : {}),
+            ...(input.orderDetails ? { "pedido": input.orderDetails } : {}),
           },
         },
       ],
@@ -345,11 +372,15 @@ async function handleAllowedStatus(payload: VtexWebhookPayload) {
     return;
   }
   let vtexOrderPayload: unknown | null = null;
+  let orderDetails: string | null = null;
+  const vtexResult = await fetchTrackingUrlFromVtex(orderNumber);
+  vtexOrderPayload = vtexResult.order;
+  if (vtexOrderPayload) {
+    orderDetails = buildOrderDetails(vtexOrderPayload);
+  }
   if (messageTemplate === "pedido_com_confirmacao_de_envio") {
     if (!trackingUrl) {
-      const vtexResult = await fetchTrackingUrlFromVtex(orderNumber);
       trackingUrl = vtexResult.trackingUrl;
-      vtexOrderPayload = vtexResult.order;
     }
     if (!trackingUrl) {
       logInfo("Não foi possível obter trackingUrl", {
@@ -382,6 +413,7 @@ async function handleAllowedStatus(payload: VtexWebhookPayload) {
     orderNumber,
     purchaseDate,
     trackingUrl: trackingUrl ?? undefined,
+    orderDetails: orderDetails ?? undefined,
   });
 
   try {
