@@ -126,8 +126,7 @@ const vtexAppToken = process.env.VTEX_APP_TOKEN ?? "";
 function resolveMessageTemplate(status: string): string {
   if (
     status === "ready-for-handling" ||
-    status === "handling" ||
-    status === "payment-approved"
+    status === "handling"
   ) {
     return "pedido_ready_for_handling_v1";
   }
