@@ -387,14 +387,6 @@ async function handleAllowedStatus(payload: VtexWebhookPayload, status: string) 
   const messageTemplate = resolveMessageTemplate(status);
   if (!messageTemplate) {
     logInfo("Status sem template configurado", { status });
-    await saveLog({
-      status,
-      orderNumber,
-      purchaseDate: purchaseDate ?? undefined,
-      trackingUrl: trackingUrl ?? undefined,
-      note: "Status sem template configurado",
-      webhookPayload: payload,
-    });
     return;
   }
 
@@ -547,12 +539,6 @@ app.post("/webhook/vtex", async (req: Request, res: Response) => {
       purchaseDate: extractPurchaseDate(payload),
     });
   }
-
-  await saveLog({
-    status,
-    note: "Status ignorado",
-    webhookPayload: payload,
-  });
 
   return res.status(202).json({
     ok: true,
