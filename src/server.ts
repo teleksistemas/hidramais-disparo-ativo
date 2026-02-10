@@ -20,9 +20,7 @@ const allowedStatuses = new Set([
   "handling",
   "invoiced",
   "shipped",
-  "payment-approved",
   "invoice",
-  "approve-payment",
 ]);
 
 type VtexWebhookPayload = {
@@ -54,7 +52,6 @@ type VtexWebhookPayload = {
 
 function normalizeStatus(status: string | null | undefined): string {
   const s = (status ?? "").toLowerCase();
-  if (s === "approve-payment") return "payment-approved";
   if (s === "invoice") return "invoiced";
   return s;
 }
@@ -148,6 +145,24 @@ function logInfo(message: string, data?: Record<string, unknown>) {
     console.log(`[${timestamp}] ${message}`, data);
   } else {
     console.log(`[${timestamp}] ${message}`);
+  }
+}
+
+async function alreadySent(orderNumber: string, messageTemplate: string): Promise<boolean> {
+  if (!process.env.DATABASE_URL) {
+    return false;
+  }
+
+  try {
+    const existing = await prisma.webhookLog.findFirst({
+      where: { orderNumber, messageTemplate },
+      select: { id: true },
+    });
+    return Boolean(existing);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logInfo("Falha ao consultar logs duplicados", { message, orderNumber, messageTemplate });
+    return false;
   }
 }
 
@@ -389,6 +404,15 @@ async function handleAllowedStatus(payload: VtexWebhookPayload, status: string) 
     return;
   }
 
+  const duplicated = await alreadySent(orderNumber, messageTemplate);
+  if (duplicated) {
+    logInfo("Duplicata detectada: mensagem já enviada para este pedido/template; nada será reenviado", {
+      orderNumber,
+      messageTemplate,
+    });
+    return;
+  }
+
   let vtexOrderPayload: unknown | null = null;
   let orderDetails: string | null = null;
   const vtexResult = await fetchTrackingUrlFromVtex(orderNumber);
@@ -426,7 +450,7 @@ async function handleAllowedStatus(payload: VtexWebhookPayload, status: string) 
   }
 
   if (!customerName || !email || !phone || !orderNumber || !purchaseDate) {
-    logInfo('Dados obrigat�rios ausentes mesmo ap�s consulta VTEX', {
+    logInfo('Dados obrigatórios ausentes mesmo após consulta VTEX', {
       customerName,
       email,
       phone,
@@ -439,7 +463,7 @@ async function handleAllowedStatus(payload: VtexWebhookPayload, status: string) 
       orderNumber: orderNumber ?? undefined,
       purchaseDate: purchaseDate ?? undefined,
       trackingUrl: trackingUrl ?? undefined,
-      note: 'Dados obrigat�rios ausentes mesmo ap�s consulta VTEX',
+      note: 'Dados obrigatórios ausentes mesmo após consulta VTEX',
       webhookPayload: payload,
       vtexOrderPayload: vtexOrderPayload ?? undefined,
     });
@@ -448,7 +472,7 @@ async function handleAllowedStatus(payload: VtexWebhookPayload, status: string) 
 
   if (messageTemplate === 'pedido_com_confirmacao_de_envio_v1') {
     if (!trackingUrl) {
-      logInfo('N�o foi poss�vel obter trackingUrl', {
+      logInfo('Não foi possível obter trackingUrl', {
         orderNumber,
         purchaseDate,
       });
@@ -457,7 +481,7 @@ async function handleAllowedStatus(payload: VtexWebhookPayload, status: string) 
         orderNumber,
         messageTemplate,
         purchaseDate,
-        note: 'N�o foi poss�vel obter trackingUrl',
+        note: 'Não foi possóvel obter trackingUrl',
         webhookPayload: payload,
         vtexOrderPayload: vtexOrderPayload ?? undefined,
       });
