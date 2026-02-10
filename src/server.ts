@@ -9,10 +9,6 @@ const app = express();
 app.use(express.json({ limit: "2mb" }));
 app.use((req: Request, _res: Response, next: NextFunction) => {
   logInfo("Request recebido", {
-    method: req.method,
-    url: req.originalUrl,
-    headers: req.headers,
-    query: req.query,
     body: req.body,
   });
   next();
@@ -24,12 +20,25 @@ const allowedStatuses = new Set([
   "handling",
   "invoiced",
   "shipped",
+  "payment-approved",
+  "invoice",
+  "approve-payment",
 ]);
 
 type VtexWebhookPayload = {
   orderId?: string;
   status?: string;
   creationDate?: string;
+  OrderId?: string;
+  State?: string;
+  LastState?: string;
+  LastChange?: string;
+  CurrentChange?: string;
+  Domain?: string;
+  Origin?: {
+    Account?: string;
+    Key?: string;
+  } | null;
   packageAttachment?: {
     packages?: Array<{
       trackingUrl?: string | null;
@@ -43,6 +52,17 @@ type VtexWebhookPayload = {
   } | null;
 };
 
+function normalizeStatus(status: string | null | undefined): string {
+  const s = (status ?? "").toLowerCase();
+  if (s === "approve-payment") return "payment-approved";
+  if (s === "invoice") return "invoiced";
+  return s;
+}
+
+function extractStatus(payload: VtexWebhookPayload): string | null {
+  return payload.status ?? payload.State ?? null;
+}
+
 function extractCustomerName(payload: VtexWebhookPayload): string | null {
   const firstName = payload.clientProfileData?.firstName?.trim();
   const lastName = payload.clientProfileData?.lastName?.trim();
@@ -51,11 +71,11 @@ function extractCustomerName(payload: VtexWebhookPayload): string | null {
 }
 
 function extractOrderNumber(payload: VtexWebhookPayload): string | null {
-  return payload.orderId ?? null;
+  return payload.orderId ?? payload.OrderId ?? null;
 }
 
 function extractPurchaseDate(payload: VtexWebhookPayload): string | null {
-  return payload.creationDate ?? null;
+  return payload.creationDate ?? payload.CurrentChange ?? payload.LastChange ?? null;
 }
 
 function extractTrackingUrl(payload: VtexWebhookPayload): string | null {
@@ -104,7 +124,11 @@ const vtexBaseUrl = process.env.VTEX_BASE_URL ?? "";
 const vtexAppKey = process.env.VTEX_APP_KEY ?? "";
 const vtexAppToken = process.env.VTEX_APP_TOKEN ?? "";
 function resolveMessageTemplate(status: string): string {
-  if (status === "ready-for-handling" || status === "handling") {
+  if (
+    status === "ready-for-handling" ||
+    status === "handling" ||
+    status === "payment-approved"
+  ) {
     return "pedido_ready_for_handling_v1";
   }
   if (status === "invoiced" || status === "shipped") {
@@ -339,61 +363,101 @@ async function sendToBlip(payload: BlipPayload): Promise<{ status: number; body:
   return { status: response.status, body };
 }
 
-async function handleAllowedStatus(payload: VtexWebhookPayload) {
-  const customerName = extractCustomerName(payload);
+async function handleAllowedStatus(payload: VtexWebhookPayload, status: string) {
+  let customerName = extractCustomerName(payload);
   const orderNumber = extractOrderNumber(payload);
-  const purchaseDate = extractPurchaseDate(payload);
+  let purchaseDate = extractPurchaseDate(payload);
   let trackingUrl = extractTrackingUrl(payload);
-  const email = payload.clientProfileData?.email ?? null;
-  const phone = payload.clientProfileData?.phone ?? null;
-  const status = payload.status ?? "";
+  let email = payload.clientProfileData?.email ?? null;
+  let phone = payload.clientProfileData?.phone ?? null;
 
-  if (!customerName || !email || !phone || !orderNumber || !purchaseDate) {
-    logInfo("Webhook recebido sem dados obrigatórios", {
-      customerName,
-      email,
-      phone,
-      orderNumber,
-      purchaseDate,
-    });
+  if (!orderNumber) {
+    logInfo("Webhook sem orderNumber", { status, payloadOrderId: payload.OrderId });
     await saveLog({
       status,
-      orderNumber: orderNumber ?? undefined,
+      orderNumber: undefined,
       purchaseDate: purchaseDate ?? undefined,
       trackingUrl: trackingUrl ?? undefined,
-      note: "Webhook recebido sem dados obrigatórios",
+      note: "Webhook sem orderNumber",
       webhookPayload: payload,
     });
     return;
   }
 
-  const leadType = "api_alerta_webhook";
   const messageTemplate = resolveMessageTemplate(status);
   if (!messageTemplate) {
-    logInfo("Status sem template configurado", { status: payload.status });
+    logInfo("Status sem template configurado", { status });
     await saveLog({
       status,
       orderNumber,
-      purchaseDate,
+      purchaseDate: purchaseDate ?? undefined,
       trackingUrl: trackingUrl ?? undefined,
       note: "Status sem template configurado",
       webhookPayload: payload,
     });
     return;
   }
+
   let vtexOrderPayload: unknown | null = null;
   let orderDetails: string | null = null;
   const vtexResult = await fetchTrackingUrlFromVtex(orderNumber);
   vtexOrderPayload = vtexResult.order;
+
   if (vtexOrderPayload) {
-    orderDetails = buildOrderDetails(vtexOrderPayload);
-  }
-  if (messageTemplate === "pedido_com_confirmacao_de_envio_v1") {
-    if (!trackingUrl) {
-      trackingUrl = vtexResult.trackingUrl;
+    const orderAny = vtexOrderPayload as {
+      creationDate?: string | null;
+      clientProfileData?: {
+        firstName?: string | null;
+        lastName?: string | null;
+        email?: string | null;
+        phone?: string | null;
+      } | null;
+    };
+
+    purchaseDate = purchaseDate ?? orderAny.creationDate ?? null;
+
+    const client = orderAny.clientProfileData;
+    if (client) {
+      if (!customerName) {
+        const firstName = client.firstName?.trim();
+        const lastName = client.lastName?.trim();
+        const full = [firstName, lastName].filter(Boolean).join(' ').trim();
+        customerName = full.length > 0 ? full : null;
+      }
+      email = email ?? client.email ?? null;
+      phone = phone ?? client.phone ?? null;
     }
+
+    orderDetails = buildOrderDetails(vtexOrderPayload);
     if (!trackingUrl) {
-      logInfo("Não foi possível obter trackingUrl", {
+      trackingUrl = vtexResult.trackingUrl ?? pickTrackingUrlFromOrder(vtexOrderPayload);
+    }
+  }
+
+  if (!customerName || !email || !phone || !orderNumber || !purchaseDate) {
+    logInfo('Dados obrigat�rios ausentes mesmo ap�s consulta VTEX', {
+      customerName,
+      email,
+      phone,
+      orderNumber,
+      purchaseDate,
+      status,
+    });
+    await saveLog({
+      status,
+      orderNumber: orderNumber ?? undefined,
+      purchaseDate: purchaseDate ?? undefined,
+      trackingUrl: trackingUrl ?? undefined,
+      note: 'Dados obrigat�rios ausentes mesmo ap�s consulta VTEX',
+      webhookPayload: payload,
+      vtexOrderPayload: vtexOrderPayload ?? undefined,
+    });
+    return;
+  }
+
+  if (messageTemplate === 'pedido_com_confirmacao_de_envio_v1') {
+    if (!trackingUrl) {
+      logInfo('N�o foi poss�vel obter trackingUrl', {
         orderNumber,
         purchaseDate,
       });
@@ -402,18 +466,21 @@ async function handleAllowedStatus(payload: VtexWebhookPayload) {
         orderNumber,
         messageTemplate,
         purchaseDate,
-        note: "Não foi possível obter trackingUrl",
+        note: 'N�o foi poss�vel obter trackingUrl',
         webhookPayload: payload,
         vtexOrderPayload: vtexOrderPayload ?? undefined,
       });
       return;
     }
   }
-  logInfo("Webhook validado e pronto para envio", {
-    status: payload.status,
+
+  const leadType = 'api_alerta_webhook';
+  logInfo('Webhook validado e pronto para envio', {
+    status,
     orderNumber,
     messageTemplate,
   });
+
   const blipPayload = buildBlipPayload({
     name: customerName,
     email,
@@ -460,12 +527,12 @@ async function handleAllowedStatus(payload: VtexWebhookPayload) {
 
 app.post("/webhook/vtex", async (req: Request, res: Response) => {
   const payload = req.body as VtexWebhookPayload;
-  const status = payload.status ?? "";
+  const status = normalizeStatus(extractStatus(payload));
 
   if (allowedStatuses.has(status)) {
     try {
       logInfo("Status permitido recebido", { status });
-      await handleAllowedStatus(payload);
+      await handleAllowedStatus(payload, status);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro desconhecido";
       logInfo("Falha ao processar webhook", { status, message });
