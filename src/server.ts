@@ -1,5 +1,5 @@
 import "dotenv/config";
-import express, { Request, Response } from "express";
+import express, { NextFunction, Request, Response } from "express";
 import { randomUUID } from "crypto";
 import { constrainedMemory } from "process";
 import { formatDateIfValid } from "./utils/date.js";
@@ -7,6 +7,16 @@ import { Prisma, PrismaClient } from "@prisma/client";
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  logInfo("Request recebido", {
+    method: req.method,
+    url: req.originalUrl,
+    headers: req.headers,
+    query: req.query,
+    body: req.body,
+  });
+  next();
+});
 const prisma = new PrismaClient();
 
 const allowedStatuses = new Set([
