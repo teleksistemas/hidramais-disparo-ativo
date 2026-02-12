@@ -20,7 +20,6 @@ const allowedStatuses = new Set([
   "handling",
   "invoiced",
   "shipped",
-  "invoice",
 ]);
 
 type VtexWebhookPayload = {
