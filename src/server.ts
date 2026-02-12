@@ -51,7 +51,6 @@ type VtexWebhookPayload = {
 
 function normalizeStatus(status: string | null | undefined): string {
   const s = (status ?? "").toLowerCase();
-  if (s === "invoice") return "invoiced";
   return s;
 }
 
@@ -574,3 +573,6 @@ const port = process.env.PORT ? Number(process.env.PORT) : 3000;
 app.listen(port, () => {
   console.log(`Servidor webhook ativo em http://localhost:${port}`);
 });
+
+
+
