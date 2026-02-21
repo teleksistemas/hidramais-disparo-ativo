@@ -1,9 +1,11 @@
 import "dotenv/config";
 import express, { NextFunction, Request, Response } from "express";
 import { randomUUID } from "crypto";
-import { constrainedMemory } from "process";
 import { formatDateIfValid } from "./utils/date.js";
 import { Prisma, PrismaClient } from "@prisma/client";
+import { createWebhookRoutes } from "./routes/webhookRoutes.js";
+import { createBuscarPedidoVtexRoutes } from "./routes/vtexRoutes.js";
+import { VtexWebhookPayload } from "./types/vtex.js";
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -21,33 +23,6 @@ const allowedStatuses = new Set([
   "invoiced",
   "shipped",
 ]);
-
-type VtexWebhookPayload = {
-  orderId?: string;
-  status?: string;
-  creationDate?: string;
-  OrderId?: string;
-  State?: string;
-  LastState?: string;
-  LastChange?: string;
-  CurrentChange?: string;
-  Domain?: string;
-  Origin?: {
-    Account?: string;
-    Key?: string;
-  } | null;
-  packageAttachment?: {
-    packages?: Array<{
-      trackingUrl?: string | null;
-    }> | null;
-  } | null;
-  clientProfileData?: {
-    firstName?: string | null;
-    lastName?: string | null;
-    email?: string | null;
-    phone?: string | null;
-  } | null;
-};
 
 function normalizeStatus(status: string | null | undefined): string {
   const s = (status ?? "").toLowerCase();
@@ -118,6 +93,38 @@ const masterstate = process.env.MASTERSTATE ?? "";
 const vtexBaseUrl = process.env.VTEX_BASE_URL ?? "";
 const vtexAppKey = process.env.VTEX_APP_KEY ?? "";
 const vtexAppToken = process.env.VTEX_APP_TOKEN ?? "";
+const apiRouteToken = process.env.API_ROUTE_TOKEN ?? "";
+
+function extractBearerToken(value: string | undefined): string {
+  if (!value) return "";
+  const [scheme, token] = value.split(" ");
+  if (!scheme || !token) return "";
+  return scheme.toLowerCase() === "bearer" ? token.trim() : "";
+}
+
+function requireApiRouteToken(req: Request, res: Response, next: NextFunction) {
+  if (!apiRouteToken) {
+    logInfo("API_ROUTE_TOKEN não configurado");
+    return res.status(500).json({
+      ok: false,
+      message: "Token da API não configurado",
+    });
+  }
+
+  const headerToken = String(req.header("x-api-token") ?? "").trim();
+  const bearerToken = extractBearerToken(req.header("authorization"));
+  const requestToken = headerToken || bearerToken;
+
+  if (requestToken !== apiRouteToken) {
+    return res.status(401).json({
+      ok: false,
+      message: "Token inválido",
+    });
+  }
+
+  next();
+}
+
 function resolveMessageTemplate(status: string): string {
   if (
     status === "ready-for-handling" ||
@@ -538,36 +545,26 @@ async function handleAllowedStatus(payload: VtexWebhookPayload, status: string) 
   }
 }
 
-app.post("/webhook/vtex", async (req: Request, res: Response) => {
-  const payload = req.body as VtexWebhookPayload;
-  const status = normalizeStatus(extractStatus(payload));
+app.use(
+  createWebhookRoutes({
+    allowedStatuses,
+    normalizeStatus,
+    extractStatus,
+    extractCustomerName,
+    extractOrderNumber,
+    extractPurchaseDate,
+    handleAllowedStatus,
+    logInfo,
+  }),
+);
 
-  if (allowedStatuses.has(status)) {
-    try {
-      logInfo("Status permitido recebido", { status });
-      await handleAllowedStatus(payload, status);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Erro desconhecido";
-      logInfo("Falha ao processar webhook", { status, message });
-      return res.status(502).json({ ok: false, handled: false, status, message });
-    }
-    return res.status(200).json({
-      ok: true,
-      handled: true,
-      status,
-      customerName: extractCustomerName(payload),
-      orderNumber: extractOrderNumber(payload),
-      purchaseDate: extractPurchaseDate(payload),
-    });
-  }
-
-  return res.status(202).json({
-    ok: true,
-    handled: false,
-    status,
-    message: "Status ignorado",
-  });
-});
+app.use(
+  createBuscarPedidoVtexRoutes({
+    requireApiRouteToken,
+    buscarPedidoNaVtex: fetchTrackingUrlFromVtex,
+    logInfo,
+  }),
+);
 
 const port = process.env.PORT ? Number(process.env.PORT) : 3000;
 app.listen(port, () => {
