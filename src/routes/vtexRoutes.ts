@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response, Router } from "express";
+import { formatDateIfValid } from "../utils/date.js";
 
 type BuscarPedidoVtexRoutesDeps = {
   requireApiRouteToken: (req: Request, res: Response, next: NextFunction) => void;
@@ -14,6 +15,7 @@ export function createBuscarPedidoVtexRoutes(deps: BuscarPedidoVtexRoutesDeps) {
   function mapPedidoResumo(order: unknown, trackingUrl: string | null) {
     const orderAny = order as {
       status?: string | null;
+      statusDescription?: string | null;
       creationDate?: string | null;
       orderId?: string | null;
       items?: Array<{ name?: string | null }> | null;
@@ -24,8 +26,8 @@ export function createBuscarPedidoVtexRoutes(deps: BuscarPedidoVtexRoutesDeps) {
       .filter((name): name is string => Boolean(name));
 
     return {
-      status: orderAny.status ?? null,
-      dataCompra: orderAny.creationDate ?? null,
+      status: orderAny.statusDescription ?? orderAny.status ?? null,
+      dataCompra: orderAny.creationDate ? formatDateIfValid(orderAny.creationDate) : null,
       numeroPedido: orderAny.orderId ?? null,
       descricaoProduto,
       urlRastreamento: trackingUrl ?? null,
