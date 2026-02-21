@@ -23,7 +23,8 @@ export function createBuscarPedidoVtexRoutes(deps: BuscarPedidoVtexRoutesDeps) {
 
     const descricaoProduto = (orderAny.items ?? [])
       .map((item) => item?.name?.trim())
-      .filter((name): name is string => Boolean(name));
+      .filter((name): name is string => Boolean(name))
+      .join(" | ");
 
     return {
       status: orderAny.statusDescription ?? orderAny.status ?? null,
