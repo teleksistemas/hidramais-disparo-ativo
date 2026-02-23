@@ -57,6 +57,38 @@ function extractTrackingUrl(payload: VtexWebhookPayload): string | null {
   return null;
 }
 
+function extractTrackingNumberFromUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+
+  try {
+    const parsed = new URL(url);
+    const code = parsed.searchParams.get("objetos")?.trim();
+    return code ? code : null;
+  } catch {
+    const match = url.match(/[?&]objetos=([^&#]+)/i);
+    if (!match?.[1]) return null;
+    const code = decodeURIComponent(match[1]).trim();
+    return code ? code : null;
+  }
+}
+
+function extractTrackingNumber(payload: VtexWebhookPayload): string | null {
+  const packages = (payload.packageAttachment?.packages ?? []) as Array<{
+    trackingNumber?: string | null;
+    trackingUrl?: string | null;
+  }>;
+
+  for (const pkg of packages) {
+    const trackingNumber = pkg?.trackingNumber?.trim() ?? null;
+    if (trackingNumber) return trackingNumber;
+
+    const fromUrl = extractTrackingNumberFromUrl(pkg?.trackingUrl ?? null);
+    if (fromUrl) return fromUrl;
+  }
+
+  return null;
+}
+
 type BlipPayload = {
   id: string;
   to: string;
@@ -125,7 +157,11 @@ function requireApiRouteToken(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-function resolveMessageTemplate(status: string): string {
+function isCorreiosTracking(trackingUrl: string | null | undefined): boolean {
+  return (trackingUrl ?? "").toLowerCase().includes("correios");
+}
+
+function resolveMessageTemplate(status: string, trackingUrl?: string | null): string {
   if (
     status === "ready-for-handling" ||
     status === "handling"
@@ -133,6 +169,9 @@ function resolveMessageTemplate(status: string): string {
     return "pedido_ready_for_handling_v1";
   }
   if (status === "invoiced" || status === "shipped") {
+    if (isCorreiosTracking(trackingUrl)) {
+      return "envio_correios";
+    }
     return "pedido_com_confirmacao_de_envio_v1";
   }
   return "";
@@ -238,6 +277,37 @@ function pickTrackingUrlFromOrder(order: unknown): string | null {
   return null;
 }
 
+function pickTrackingNumberFromOrder(order: unknown): string | null {
+  const orderAny = order as {
+    packageAttachment?: {
+      packages?: Array<{ trackingNumber?: string | null; trackingUrl?: string | null }>;
+    };
+    shippingData?: {
+      logisticsInfo?: Array<{ trackingNumber?: string | null; trackingUrl?: string | null }>;
+    };
+  };
+
+  const packages = orderAny.packageAttachment?.packages ?? [];
+  for (const pkg of packages) {
+    const trackingNumber = pkg?.trackingNumber?.trim() ?? null;
+    if (trackingNumber) return trackingNumber;
+
+    const fromUrl = extractTrackingNumberFromUrl(pkg?.trackingUrl ?? null);
+    if (fromUrl) return fromUrl;
+  }
+
+  const logistics = orderAny.shippingData?.logisticsInfo ?? [];
+  for (const item of logistics) {
+    const trackingNumber = item?.trackingNumber?.trim() ?? null;
+    if (trackingNumber) return trackingNumber;
+
+    const fromUrl = extractTrackingNumberFromUrl(item?.trackingUrl ?? null);
+    if (fromUrl) return fromUrl;
+  }
+
+  return null;
+}
+
 function buildOrderDetails(order: unknown): string | null {
   const orderAny = order as {
     statusDescription?: string | null;
@@ -307,6 +377,7 @@ function buildBlipPayload(input: {
   orderNumber: string;
   purchaseDate: string;
   trackingUrl?: string;
+  trackingNumber?: string;
   orderDetails?: string;
 }): BlipPayload {
   
@@ -335,13 +406,19 @@ function buildBlipPayload(input: {
             "2": input.orderNumber,
             "3": formatDateIfValid(input.purchaseDate),
             ...(input.trackingUrl ? { "4": input.trackingUrl } : {}),
+            ...(input.trackingNumber ? { "5": input.trackingNumber } : {}),
             ...(input.orderDetails ? { "pedido": input.orderDetails } : {}),
           },
         },
       ],
       message: {
         messageTemplate: input.messageTemplate,
-        messageParams: input.trackingUrl ? ["1", "2", "3", "4"] : ["1", "2", "3"],
+        messageParams:
+          input.messageTemplate === "envio_correios" && input.trackingUrl && input.trackingNumber
+            ? ["1", "2", "3", "4", "5"]
+            : input.trackingUrl
+              ? ["1", "2", "3", "4"]
+              : ["1", "2", "3"],
         channelType: "WhatsApp",
       },
     },
@@ -387,6 +464,7 @@ async function handleAllowedStatus(payload: VtexWebhookPayload, status: string) 
   const orderNumber = extractOrderNumber(payload);
   let purchaseDate = extractPurchaseDate(payload);
   let trackingUrl = extractTrackingUrl(payload);
+  let trackingNumber = extractTrackingNumber(payload) ?? extractTrackingNumberFromUrl(trackingUrl);
   let email = payload.clientProfileData?.email ?? null;
   let phone = payload.clientProfileData?.phone ?? null;
 
@@ -399,21 +477,6 @@ async function handleAllowedStatus(payload: VtexWebhookPayload, status: string) 
       trackingUrl: trackingUrl ?? undefined,
       note: "Webhook sem orderNumber",
       webhookPayload: payload,
-    });
-    return;
-  }
-
-  const messageTemplate = resolveMessageTemplate(status);
-  if (!messageTemplate) {
-    logInfo("Status sem template configurado", { status });
-    return;
-  }
-
-  const duplicated = await alreadySent(orderNumber, messageTemplate);
-  if (duplicated) {
-    logInfo("Duplicata detectada: mensagem já enviada para este pedido/template; nada será reenviado", {
-      orderNumber,
-      messageTemplate,
     });
     return;
   }
@@ -452,6 +515,25 @@ async function handleAllowedStatus(payload: VtexWebhookPayload, status: string) 
     if (!trackingUrl) {
       trackingUrl = vtexResult.trackingUrl ?? pickTrackingUrlFromOrder(vtexOrderPayload);
     }
+    if (!trackingNumber) {
+      trackingNumber =
+        pickTrackingNumberFromOrder(vtexOrderPayload) ?? extractTrackingNumberFromUrl(trackingUrl);
+    }
+  }
+
+  const messageTemplate = resolveMessageTemplate(status, trackingUrl);
+  if (!messageTemplate) {
+    logInfo("Status sem template configurado", { status });
+    return;
+  }
+
+  const duplicated = await alreadySent(orderNumber, messageTemplate);
+  if (duplicated) {
+    logInfo("Duplicata detectada: mensagem já enviada para este pedido/template; nada será reenviado", {
+      orderNumber,
+      messageTemplate,
+    });
+    return;
   }
 
   if (!customerName || !email || !phone || !orderNumber || !purchaseDate) {
@@ -494,6 +576,27 @@ async function handleAllowedStatus(payload: VtexWebhookPayload, status: string) 
     }
   }
 
+  if (messageTemplate === 'envio_correios') {
+    if (!trackingUrl || !trackingNumber) {
+      logInfo('Template envio_correios sem dados de rastreio suficientes', {
+        orderNumber,
+        trackingUrl,
+        trackingNumber,
+      });
+      await saveLog({
+        status,
+        orderNumber,
+        messageTemplate,
+        purchaseDate,
+        trackingUrl: trackingUrl ?? undefined,
+        note: 'Template envio_correios sem trackingUrl/trackingNumber',
+        webhookPayload: payload,
+        vtexOrderPayload: vtexOrderPayload ?? undefined,
+      });
+      return;
+    }
+  }
+
   const leadType = 'api_alerta_webhook';
   logInfo('Webhook validado e pronto para envio', {
     status,
@@ -510,6 +613,7 @@ async function handleAllowedStatus(payload: VtexWebhookPayload, status: string) 
     orderNumber,
     purchaseDate,
     trackingUrl: trackingUrl ?? undefined,
+    trackingNumber: trackingNumber ?? undefined,
     orderDetails: orderDetails ?? undefined,
   });
 

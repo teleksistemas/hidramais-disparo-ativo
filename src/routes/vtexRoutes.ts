@@ -79,3 +79,5 @@ export function createBuscarPedidoVtexRoutes(deps: BuscarPedidoVtexRoutesDeps) {
 
   return router;
 }
+
+parseInt
